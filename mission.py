@@ -49,7 +49,7 @@ class Mission():
         earth_eom = pydylan.eom.S2BP(earth)
         initial_state = earth_eom.coe2rv(initial_sma,
                                          initial_eccentricity,
-                                         0.,
+                                         -5.14,
                                          0.,
                                          0.,
                                          0.)
@@ -93,13 +93,24 @@ class Mission():
         for entry in control:
             print('{},'.format(entry))
 
+    def calculate_delta_v_loi(self, initial_orbit, terminal_altitude):
+        ''' Calculate the velocity in the MCI '''
+
+        terminal_altitude += self.moon_radius
+
+        v_moon_rel_earth = self.velocity  # mean orbital velocity of the moon in ECI
+        v_sc_rel_earth = np.sqrt(2 * self.system.mu / initial_orbit.ra - self.system.mu / initial_orbit.sma)  # orbital velocity of the spacecraft in ECI
+        vinf = np.sqrt(v_moon_rel_earth**2 + v_sc_rel_earth**2 - 2 * v_moon_rel_earth * v_sc_rel_earth)  # excess velocity assuming inclination and fpa to be zero
+        v_sc_rel_moon = np.sqrt(vinf**2 + 2 * self.moon_mu / terminal_altitude)  # spacecraft orbital velocity in LCI
+        
+        return np.abs(v_sc_rel_moon - np.sqrt(self.moon_mu / terminal_altitude))
+
     def concept_1(self):
         '''
         Analyzing Hohmann (and Bielliptic) Transfers
 
         We consider a circular parking orbit around Earth (e.g., LEO) as our initial condition, and aim to insert ourselves into a circular orbit around the Moon.
-        We assume that we have access to a capsule which detaches from the second stage, and descends to the lunar surface.
-        For the return leg, we consider the symmetric problem.
+        We assume that we have access to a capsule which detaches from the spacecraft, and descends to the lunar surface.
 
         '''
         initial_altitude, terminal_altitude = self.initial_altitude, self.terminal_altitude
@@ -108,7 +119,7 @@ class Mission():
         intermediate_orbit = ConicSections(radius=self.system.radius, rp=initial_altitude, ra=self.distance / 2) # elliptic, apogee arbitrarily chosen
         final_orbit = ConicSections(radius=self.system.radius, rp=self.distance + self.moon_radius + terminal_altitude, ra=self.distance + self.moon_radius + terminal_altitude) # circular
 
-        # TLI: Standard Hohmann/Bielliptic
+        # TLI
         dv_tli_hoh, tof_tli_hoh = self.system.hohmann(ri=initial_orbit.rp, rf=final_orbit.ra)
         dv_tli_bie, tof_tli_bie = self.system.bielliptic(ri=initial_orbit.rp, rb=intermediate_orbit.ra, rf=final_orbit.ra)
         dv_tli = min(dv_tli_hoh, dv_tli_bie)
@@ -116,20 +127,20 @@ class Mission():
         if ((dv_tli_bie < dv_tli_hoh) and (tof_tli_bie > 2 * tof_tli_hoh)):
             print("Going forward with Hohmann Transfer", flush=True)
             dv_tli, tof_tli = dv_tli_hoh, tof_tli_hoh
-        
-        # LOI: Circularization
-        self.switch_central_body() # switch central body to be the moon
-        dv_loi, _ = self.system.raise_apogee(rp=terminal_altitude, rai=self.distance + self.earth_radius + initial_altitude, raf=terminal_altitude)
+        # LOI
+        dv_loi = self.calculate_delta_v_loi(final_orbit, self.terminal_altitude)
         # LD
+        self.switch_central_body() # switch central body to be the moon for {LD, LA and EOI}
         dv_ld, _ = self.system.hohmann(ri=terminal_altitude, rf=0) # from the LLO to the surface of the moon
         dv_ld += np.sqrt(self.system.mu / self.system.radius) # excess velocity at the surface of the moon
         # LA
         dv_la, _ = self.system.hohmann(ri=0, rf=terminal_altitude) # from the surface to the LLO
         dv_la += np.sqrt(self.system.mu / self.system.radius) # excess velocity at the surface of the moon
-        # EOI: Circularization
+        dv_la += (1 / 6 * 2) # gravity losses, moon's gravity 1/6 of earth's, typical gravity losses for earth ~2km/s
+        # EOI:
         dv_eoi, _ = self.system.raise_apogee(rp=terminal_altitude, rai=terminal_altitude, raf=self.distance + self.earth_radius + initial_altitude)
         # TEI: 
-        self.switch_central_body() # switch central body to be the earth
+        self.switch_central_body() # switch central body to be the earth for {TEI, ED}
         dv_tei_hoh, tof_tei_hoh = self.system.hohmann(ri=final_orbit.rp, rf=initial_orbit.ra)
         dv_tei_bie, tof_tei_bie = self.system.bielliptic(ri=final_orbit.rp, rb=intermediate_orbit.ra, rf=initial_orbit.ra)
         dv_tei = min(dv_tei_hoh, dv_tei_bie)
@@ -148,7 +159,8 @@ class Mission():
         results = {'Type': ['TLI', 'LOI', 'LD', 'LA', 'EOI', 'TEI', 'ED', 'TOTAL', 'MARGIN (20%)', 'ADJUSTED TOTAL'], 'Delta-V (km/s)': [dv_tli, dv_loi, dv_ld, dv_la, dv_eoi, dv_tei, dv_ed, dv_tot, 0.2 * dv_tot, 1.2 * dv_tot], 'Transfer Time (days)': [tof_tli, 'n/a', 'n/a', 'n/a', 'n/a', tof_tei, 'n/a', tof_tot, '', '']}
         print(tabulate(results, headers='keys'))
 
-        print("MASS FRACTION: {:.3f}".format(self.get_mass_fraction(dv_tot * 1e3)))
+        print("MASS FRACTION (w/o margin): {:.3f}".format(self.get_mass_fraction(dv_tot * 1e3)))
+        print("MASS FRACTION (w/ margin): {:.3f}".format(self.get_mass_fraction(1.2 * dv_tot * 1e3)))
 
         return 0
 
@@ -157,7 +169,7 @@ class Mission():
         Uphoff (1993)
 
         We consider a GTO around Earth (200 x 35975) as our initial condition, and aim to insert ourselves into a circular orbit around the Moon.
-        We assume that we have access to a capsule which detaches from the second stage, and descends on to the lunar surface.
+        We assume that we have access to a capsule which detaches from the spacecraft, and descends to the lunar surface.
         For the return leg, we consider the same elliptic orbit as the last earth phasing and wait long enough to arrive at the perigee of this phasing orbit.
         Then, we perform a burn to descend to the earth surface.
 
@@ -169,38 +181,40 @@ class Mission():
         intermediate_orbit = ConicSections(radius=self.system.radius, rp=initial_altitude, ra=self.distance / 2) # elliptic
         final_orbit = ConicSections(radius=self.system.radius, rp=initial_altitude, ra=self.distance + self.moon_radius + terminal_altitude) # elliptic
 
-        # TLI:
+        # TLI
         dv_tli_1, _ = self.system.raise_apogee(rp=initial_orbit.rp, rai=initial_orbit.ra, raf=intermediate_orbit.ra)
         dv_tli_2, _ = self.system.raise_apogee(rp=initial_orbit.rp, rai=intermediate_orbit.ra, raf=final_orbit.ra)
         dv_tli = dv_tli_1 + dv_tli_2
-        tof_tli = (2 * np.pi * np.sqrt(intermediate_orbit.sma**3 / self.system.mu) + np.pi * np.sqrt(final_orbit.sma**3 / self.system.mu)) * SECONDS2DAYS # one intermediate phasing orbit period + half of the last phasing orbit period
-        
-        # LOI: Circularization
-        self.switch_central_body() # switch central body to be the moon
-        dv_loi, _ = self.system.raise_apogee(rp=terminal_altitude, rai=self.distance + self.earth_radius + initial_altitude, raf=terminal_altitude)
+        tof_tli = (2 * np.pi * np.sqrt(intermediate_orbit.sma**3 / self.system.mu) + np.pi * np.sqrt(final_orbit.sma**3 / self.system.mu)) * SECONDS2DAYS # one intermediate phasing orbit period + half last phasing orbit period
+        # LOI
+        dv_loi = self.calculate_delta_v_loi(final_orbit, self.terminal_altitude)
         # LD
+        self.switch_central_body() # switch central body to be the moon for {LD, LA and TEI+EOI}
         dv_ld, _ = self.system.hohmann(ri=terminal_altitude, rf=0)
         dv_ld += np.sqrt(self.system.mu / self.system.radius)
         # LA
         dv_la, _ = self.system.hohmann(ri=0, rf=terminal_altitude)
         dv_la += np.sqrt(self.system.mu / self.system.radius)
-        # TEI + EOI: 
-        dv_tei, tof_tei = self.system.raise_apogee(rp=terminal_altitude, rai=terminal_altitude, raf=self.distance + self.earth_radius + initial_altitude)
-        
-        self.switch_central_body() # switch central body to be the earth  
+        dv_la += (1 / 6 * 2) # gravity losses, moon's gravity 1/6 of earth's, typical gravity losses for earth ~2km/s
+        # EOI: 
+        dv_eoi, _ = self.system.raise_apogee(rp=terminal_altitude, rai=terminal_altitude, raf=self.distance + self.earth_radius + initial_altitude)
+        # TEI
+        self.switch_central_body() # switch central body to be the moon for {TEI, ED}
+        dv_tei = 0 # stay on the previous elliptical orbit long enough
         tof_tei = np.pi * np.sqrt(final_orbit.sma**3 / self.system.mu) * SECONDS2DAYS # half of the last phasing orbit period
         # ED
         dv_ed, _ =  self.system.raise_apogee(rp=initial_altitude, rai=self.distance + self.moon_radius + terminal_altitude, raf=0)
         # dv_ed += np.sqrt(self.system.mu / self.system.radius) # excess velocity at the surface of the earth
 
-        dv_tot = dv_tli + dv_loi + dv_ld + dv_la + dv_tei + dv_ed
+        dv_tot = dv_tli + dv_loi + dv_ld + dv_la + dv_eoi + dv_tei + dv_ed
         tof_tot = tof_tli + tof_tei
 
         print("========================================================")
-        results = {'Type': ['TLI', 'LOI', 'LD', 'LA', 'EOI + TEI', 'ED', 'TOTAL', 'MARGIN (20%)', 'ADJUSTED TOTAL'], 'Delta-V (km/s)': [dv_tli, dv_loi, dv_ld, dv_la, dv_tei, dv_ed, dv_tot, 0.2 * dv_tot, 1.2 * dv_tot], 'Transfer Time (days)': [tof_tli, 'n/a', 'n/a', 'n/a', tof_tei, 'n/a', tof_tot, '', '']}
+        results = {'Type': ['TLI', 'LOI', 'LD', 'LA', 'EOI', 'TEI', 'ED', 'TOTAL', 'MARGIN (20%)', 'ADJUSTED TOTAL'], 'Delta-V (km/s)': [dv_tli, dv_loi, dv_ld, dv_la, dv_eoi, dv_tei, dv_ed, dv_tot, 0.2 * dv_tot, 1.2 * dv_tot], 'Transfer Time (days)': [tof_tli, 'n/a', 'n/a', 'n/a', 'n/a', tof_tei, 'n/a', tof_tot, '', '']}
         print(tabulate(results, headers='keys'))
 
-        print("MASS FRACTION: {:.3f}".format(self.get_mass_fraction(dv_tot * 1e3)))
+        print("MASS FRACTION (w/o margin): {:.3f}".format(self.get_mass_fraction(dv_tot * 1e3)))
+        print("MASS FRACTION (w/ margin): {:.3f}".format(self.get_mass_fraction(1.2 * dv_tot * 1e3)))
 
         return 0
 
@@ -209,7 +223,7 @@ class Mission():
         Direct Transfer
 
         We consider the earth surface as our initial condition, and aim to directly land on the moon.
-        While this may not a feasible trajectory to fly, we intend to use this as an lower bound on the fuel expenditure.
+        While this may not a feasible trajectory to fly, we intend to use this to obtain an upper bound on the fuel expenditure.
 
         '''
 
@@ -223,30 +237,20 @@ class Mission():
         dv_tli_1, _ = self.system.raise_apogee(rp=initial_orbit.rp, rai=initial_orbit.ra, raf=intermediate_orbit.ra)
         dv_tli_2, _ = self.system.raise_apogee(rp=initial_orbit.rp, rai=intermediate_orbit.ra, raf=final_orbit.ra)
         dv_tli = dv_tli_1 + dv_tli_2
-        tof_tli = (2 * np.pi * np.sqrt(intermediate_orbit.sma**3 / self.system.mu) + np.pi * np.sqrt(final_orbit.sma**3 / self.system.mu)) * SECONDS2DAYS # one intermediate phasing orbit period + half of the last phasing orbit period
-
-        dv_tot = dv_tli
-        tof_tot = tof_tli
-        
+        tof_tli = (2 * np.pi * np.sqrt(intermediate_orbit.sma**3 / self.system.mu) + np.pi * np.sqrt(final_orbit.sma**3 / self.system.mu)) * SECONDS2DAYS # one intermediate phasing orbit period + half last phasing orbit period
         # LOI
-        v_moon_rel_earth = self.velocity # mean orbital velocity of the moon in ECI
-        v_sc_rel_earth = np.sqrt(2 * self.system.mu / final_orbit.ra - self.system.mu / final_orbit.sma) # spacecraft orbital velocity in ECI
-        vinf = np.sqrt(v_moon_rel_earth**2 + v_sc_rel_earth**2 - 2 * v_moon_rel_earth * v_sc_rel_earth) # assuming inclination and fpa to be zero
-        v_sc_rel_moon = np.sqrt(vinf**2 + 2 * self.moon_mu / self.moon_radius) # spacecraft orbital velocity in LCI
+        dv_loi = self.calculate_delta_v_loi(final_orbit, self.terminal_altitude)
+        dv_loi += np.sqrt(self.moon_mu / self.moon_radius)
+        # TEI
+        dv_tei_1, _ = self.system.raise_apogee(rp=initial_orbit.rp, rai=final_orbit.ra, raf=0.)
+        dv_tei = dv_tei_1 + dv_loi # assuming that the fuel expenditure to reach the moon SOI is the same as the LOI
+        tof_tei = np.pi * np.sqrt(final_orbit.sma**3 / self.system.mu) * SECONDS2DAYS
 
-        dv_loi = v_sc_rel_moon
-
-        dv_tot += v_sc_rel_moon
-        
-        # return leg assumed to be a symmetric problem
-        dv_tei = dv_tli_1 + dv_tli_2 + dv_loi
-        tof_tei = tof_tli
-        
-        dv_tot += dv_tei
-        tof_tot += tof_tei
+        dv_tot = dv_tli + dv_loi + dv_tei
+        tof_tot = tof_tli + tof_tei
 
         print("========================================================")
-        results = {'Type': ['TLI', 'LOI', 'EOI + TEI', 'TOTAL', 'MARGIN (20%)', 'ADJUSTED TOTAL'], 'Delta-V (km/s)': [dv_tli, dv_loi, dv_tei, dv_tot, 0.2 * dv_tot, 1.2 * dv_tot], 'Transfer Time (days)': [tof_tli, 'n/a', tof_tei, tof_tot, '', '']}
+        results = {'Type': ['TLI', 'LOI', 'TEI', 'TOTAL', 'MARGIN (20%)', 'ADJUSTED TOTAL'], 'Delta-V (km/s)': [dv_tli, dv_loi, dv_tei, dv_tot, 0.2 * dv_tot, 1.2 * dv_tot], 'Transfer Time (days)': [tof_tli, 'n/a', tof_tei, tof_tot, '', '']}
         print(tabulate(results, headers='keys'))
 
         print("MASS FRACTION: {:.3f}".format(self.get_mass_fraction(dv_tot * 1e3)))
@@ -258,7 +262,7 @@ class Mission():
         pydylan.set_logging_severity(pydylan.enum.LogLevel.error)
 
         snopt_options = pydylan.SNOPT_options_structure()
-        snopt_options.solver_mode = pydylan.enum.solver_mode_type.feasible
+        snopt_options.solver_mode = pydylan.enum.solver_mode_type.optimal
         snopt_options.derivative_mode = pydylan.enum.derivative_mode_type.finite_differencing
         # snopt_options.enable_SNOPT_auto_scale = True
         snopt_options.quiet_SNOPT = False
@@ -267,7 +271,7 @@ class Mission():
         mbh_options = pydylan.MBH_options_structure()
         mbh_options.hop_mode = pydylan.enum.mbh_hop_mode_type.hop
         mbh_options.quiet_MBH = False
-        mbh_options.time_limit = 5 * 60 * 60
+        mbh_options.time_limit = 3 * 60 * 60
         mbh_options.number_of_solutions_to_save = 10
 
         phase_options = pydylan.phase_options_structure()
@@ -298,9 +302,9 @@ class Mission():
         mission.add_phase_options(phase_options)
         mission.optimize(snopt_options, mbh_options)
 
-        np.save("./data/c3_feasible.npy", mission.get_all_feasible_control_solutions())
+        np.save("./data/c4_feasible.npy", mission.get_all_feasible_control_solutions())
 
-        assert mission.is_best_solution_feasible()
+        # assert mission.is_best_solution_feasible()
 
         total_transfer_time = mission.get_control_state()[0] + mission.get_control_state()[1] + mission.get_control_state()[2]
 
@@ -331,11 +335,14 @@ class Mission():
         fig_xy, ax_xy = plt.subplots()
         fig_xz, ax_xz = plt.subplots()
 
-        ax_xy.plot(earth_propagated_states[:, 0], earth_propagated_states[:, 1], color='DodgerBlue')
+        # ax_xy.plot(earth_propagated_states[:, 0], earth_propagated_states[:, 1], color='DodgerBlue')
+        ax_xy.scatter(0, 0, color='DodgerBlue')
         ax_xy.plot(moon_propagated_states[:, 0], moon_propagated_states[:, 1], color='DarkGrey')
         ax_xy.plot(states[:, 0], states[:, 1], color='Chartreuse')
+        
 
-        ax_xz.plot(earth_propagated_states[:, 0], earth_propagated_states[:, 2], color='DodgerBlue')
+        # ax_xz.plot(earth_propagated_states[:, 0], earth_propagated_states[:, 2], color='DodgerBlue')
+        ax_xz.scatter(0, 0, color='DodgerBlue')
         ax_xz.plot(moon_propagated_states[:, 0], moon_propagated_states[:, 2], color='DarkGrey')
         ax_xz.plot(states[:, 0], states[:, 2], color='Chartreuse')
 
@@ -371,6 +378,16 @@ if __name__ == '__main__':
     c.concept_1()
     c.concept_2()
     c.concept_3()
-    c.concept_4()
-    
+    # c.concept_4()
+
+    # a = np.load("./data/c3_feasible.npy")
+    # dv = []
+    # tof = []
+    # for ai in a:
+    #     dv.append(c.get_delta_v(ai[3:], 4))
+    #     tof.append((ai[0] + ai[1] + ai[2]) * SECONDS2DAYS)
+
+    # print("dv: ", dv)
+    # print("tof: ", tof)
+
     pydylan.spice.unload_spice(kernels)
