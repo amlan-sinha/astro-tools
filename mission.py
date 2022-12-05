@@ -100,10 +100,25 @@ class Mission():
 
         v_moon_rel_earth = self.velocity  # mean orbital velocity of the moon in ECI
         v_sc_rel_earth = np.sqrt(2 * self.system.mu / initial_orbit.ra - self.system.mu / initial_orbit.sma)  # orbital velocity of the spacecraft in ECI
-        vinf = np.sqrt(v_moon_rel_earth**2 + v_sc_rel_earth**2 - 2 * v_moon_rel_earth * v_sc_rel_earth)  # excess velocity assuming inclination and fpa to be zero
-        v_sc_rel_moon = np.sqrt(vinf**2 + 2 * self.moon_mu / terminal_altitude)  # spacecraft orbital velocity in LCI
+        v_sc_inf = np.sqrt(v_moon_rel_earth**2 + v_sc_rel_earth**2 - 2 * v_moon_rel_earth * v_sc_rel_earth)  # excess velocity assuming inclination and fpa to be zero
+        v_sc_rel_moon = np.sqrt(v_sc_inf**2 + 2 * self.moon_mu / terminal_altitude)  # spacecraft orbital velocity in LCI
         
         return np.abs(v_sc_rel_moon - np.sqrt(self.moon_mu / terminal_altitude))
+
+    def calculate_delta_v_tei(self, initial_altitude, terminal_altitude):
+        ''' Calculate the velocity in the MCI '''
+
+        initial_altitude += self.earth_radius
+        terminal_altitude += self.moon_radius
+
+        transfer_sma = 0.5 * (initial_altitude + self.distance + terminal_altitude)
+
+        v_moon_rel_earth = self.velocity  # np.sqrt(self.earth_mu / self.distance) # mean orbital velocity of the moon in ECI
+        v_sc_rel_earth = np.sqrt(2 * self.earth_mu / self.distance - self.earth_mu / transfer_sma) # orbital velocity of the spacecraft in ECI
+        v_sc_inf = np.abs(v_moon_rel_earth - v_sc_rel_earth) # excess velocity assuming inclination and fpa to be zero
+        v_sc_rel_moon = np.sqrt(v_sc_inf**2 + 2 * self.moon_mu / terminal_altitude) # spacecraft orbital velocity in LCI
+
+        return abs(v_sc_rel_moon - np.sqrt(self.moon_mu / terminal_altitude)), np.pi * np.sqrt(transfer_sma**3 / self.earth_mu) * SECONDS2DAYS
 
     def concept_1(self):
         '''
@@ -116,7 +131,7 @@ class Mission():
         initial_altitude, terminal_altitude = self.initial_altitude, self.terminal_altitude
 
         initial_orbit = ConicSections(radius=self.system.radius, rp=initial_altitude, ra=initial_altitude) # circular
-        intermediate_orbit = ConicSections(radius=self.system.radius, rp=initial_altitude, ra=self.distance / 2) # elliptic, apogee arbitrarily chosen
+        intermediate_orbit = ConicSections(radius=self.system.radius, rp=initial_altitude, ra=self.distance / 2) # elliptic (to be used in bi-elliptic transfer), perigee same as initial altitude, apogee arbitrarily chosen [does not affect Delta V]
         final_orbit = ConicSections(radius=self.system.radius, rp=self.distance + self.moon_radius + terminal_altitude, ra=self.distance + self.moon_radius + terminal_altitude) # circular
 
         # TLI
@@ -136,28 +151,26 @@ class Mission():
         # LA
         dv_la, _ = self.system.hohmann(ri=0, rf=terminal_altitude) # from the surface to the LLO
         dv_la += np.sqrt(self.system.mu / self.system.radius) # excess velocity at the surface of the moon
-        dv_la += (1 / 6 * 2) # gravity losses, moon's gravity 1/6 of earth's, typical gravity losses for earth ~2km/s
-        # EOI:
-        dv_eoi, _ = self.system.raise_apogee(rp=terminal_altitude, rai=terminal_altitude, raf=self.distance + self.earth_radius + initial_altitude)
-        # TEI: 
-        self.switch_central_body() # switch central body to be the earth for {TEI, ED}
-        dv_tei_hoh, tof_tei_hoh = self.system.hohmann(ri=final_orbit.rp, rf=initial_orbit.ra)
-        dv_tei_bie, tof_tei_bie = self.system.bielliptic(ri=final_orbit.rp, rb=intermediate_orbit.ra, rf=initial_orbit.ra)
-        dv_tei = min(dv_tei_hoh, dv_tei_bie)
-        tof_tei = tof_tei_hoh if dv_tei == dv_tei_hoh else tof_tei_bie
-        if ((dv_tei_bie < dv_tei_hoh) and (tof_tei_bie > 2 * tof_tei_hoh)):
-            print("Going forward with Hohmann Transfer", flush=True)
-            dv_tei, tof_tei = dv_tei_hoh, tof_tei_hoh
+        dv_la += (1 / 6 * 1.5) # gravity loss: typical gravity losses for earth ~2km/s, moon's gravity 1/6 of earth's
+        # TEI
+        self.switch_central_body() # switch to earth
+        dv_tei, tof_tei = self.calculate_delta_v_tei(initial_altitude, terminal_altitude)
         # ED
-        dv_ed, _ = self.system.hohmann(ri=initial_altitude, rf=0) # from the (large) circular orbit to the surface of the earth
+        dv_ed, _ =  self.system.raise_apogee(rp=initial_altitude, rai=self.distance + self.moon_radius + terminal_altitude, raf=0) 
         # dv_ed += np.sqrt(self.system.mu / self.system.radius) # excess velocity at the surface of the earth
 
-        dv_tot = dv_tli + dv_loi + dv_ld + dv_la + dv_eoi + dv_tei + dv_ed
+        dv_tot = dv_tli + dv_loi + dv_ld + dv_la + dv_tei + dv_ed
         tof_tot = tof_tli + tof_tei
 
         print("========================================================")
-        results = {'Type': ['TLI', 'LOI', 'LD', 'LA', 'EOI', 'TEI', 'ED', 'TOTAL', 'MARGIN (20%)', 'ADJUSTED TOTAL'], 'Delta-V (km/s)': [dv_tli, dv_loi, dv_ld, dv_la, dv_eoi, dv_tei, dv_ed, dv_tot, 0.2 * dv_tot, 1.2 * dv_tot], 'Transfer Time (days)': [tof_tli, 'n/a', 'n/a', 'n/a', 'n/a', tof_tei, 'n/a', tof_tot, '', '']}
+        results = {'Type': ['TLI', 'LOI', 'LD', 'LA', 'TEI', 'ED', 'TOTAL', 'MARGIN (20%)', 'ADJUSTED TOTAL'], 'Delta-V (km/s)': [dv_tli, dv_loi, dv_ld, dv_la, dv_tei, dv_ed, dv_tot, 0.2 * dv_tot, 1.2 * dv_tot], 'Transfer Time (days)': [tof_tli, 0., 'n/a', 'n/a', tof_tei, 'n/a', tof_tot, '', '']}
         print(tabulate(results, headers='keys'))
+        print("========================================================")
+
+        print("========================================================")
+        results = {'Type': ['LD', 'LA', 'LD w/ margin', 'LA w/ margin'], 'Delta-V (km/s)': [dv_ld, dv_la, 1.2 * dv_ld, 1.2 * dv_la], 'Propellant Mass Margin': [self.get_mass_fraction(dv_ld * 1e3), self.get_mass_fraction(dv_la * 1e3), self.get_mass_fraction(1.2 * dv_ld * 1e3), self.get_mass_fraction(1.2 * dv_la * 1e3)]}
+        print(tabulate(results, headers='keys'))
+        print("========================================================")
 
         print("MASS FRACTION (w/o margin): {:.3f}".format(self.get_mass_fraction(dv_tot * 1e3)))
         print("MASS FRACTION (w/ margin): {:.3f}".format(self.get_mass_fraction(1.2 * dv_tot * 1e3)))
@@ -195,23 +208,26 @@ class Mission():
         # LA
         dv_la, _ = self.system.hohmann(ri=0, rf=terminal_altitude)
         dv_la += np.sqrt(self.system.mu / self.system.radius)
-        dv_la += (1 / 6 * 2) # gravity losses, moon's gravity 1/6 of earth's, typical gravity losses for earth ~2km/s
-        # EOI: 
-        dv_eoi, _ = self.system.raise_apogee(rp=terminal_altitude, rai=terminal_altitude, raf=self.distance + self.earth_radius + initial_altitude)
-        # TEI
-        self.switch_central_body() # switch central body to be the moon for {TEI, ED}
-        dv_tei = 0 # stay on the previous elliptical orbit long enough
-        tof_tei = np.pi * np.sqrt(final_orbit.sma**3 / self.system.mu) * SECONDS2DAYS # half of the last phasing orbit period
+        dv_la += (1 / 6 * 1.5) # gravity losses, moon's gravity 1/6 of earth's, typical gravity losses for earth ~2km/s
+        # TEI: 
+        self.switch_central_body() # switch to earth
+        dv_tei, tof_tei = self.calculate_delta_v_tei(initial_altitude, terminal_altitude)
         # ED
         dv_ed, _ =  self.system.raise_apogee(rp=initial_altitude, rai=self.distance + self.moon_radius + terminal_altitude, raf=0)
         # dv_ed += np.sqrt(self.system.mu / self.system.radius) # excess velocity at the surface of the earth
 
-        dv_tot = dv_tli + dv_loi + dv_ld + dv_la + dv_eoi + dv_tei + dv_ed
+        dv_tot = dv_tli + dv_loi + dv_ld + dv_la + dv_tei + dv_ed
         tof_tot = tof_tli + tof_tei
 
         print("========================================================")
-        results = {'Type': ['TLI', 'LOI', 'LD', 'LA', 'EOI', 'TEI', 'ED', 'TOTAL', 'MARGIN (20%)', 'ADJUSTED TOTAL'], 'Delta-V (km/s)': [dv_tli, dv_loi, dv_ld, dv_la, dv_eoi, dv_tei, dv_ed, dv_tot, 0.2 * dv_tot, 1.2 * dv_tot], 'Transfer Time (days)': [tof_tli, 'n/a', 'n/a', 'n/a', 'n/a', tof_tei, 'n/a', tof_tot, '', '']}
+        results = {'Type': ['TLI', 'LOI', 'LD', 'LA', 'TEI', 'ED', 'TOTAL', 'MARGIN (20%)', 'ADJUSTED TOTAL'], 'Delta-V (km/s)': [dv_tli, dv_loi, dv_ld, dv_la, dv_tei, dv_ed, dv_tot, 0.2 * dv_tot, 1.2 * dv_tot], 'Transfer Time (days)': [tof_tli, 0., 'n/a', 'n/a', tof_tei, 'n/a', tof_tot, '', '']}
         print(tabulate(results, headers='keys'))
+        print("========================================================")
+
+        print("========================================================")
+        results = {'Type': ['LD', 'LA', 'LD w/ margin', 'LA w/ margin'], 'Delta-V (km/s)': [dv_ld, dv_la, 1.2 * dv_ld, 1.2 * dv_la], 'Propellant Mass Margin': [self.get_mass_fraction(dv_ld * 1e3), self.get_mass_fraction(dv_la * 1e3), self.get_mass_fraction(1.2 * dv_ld * 1e3), self.get_mass_fraction(1.2 * dv_la * 1e3)]}
+        print(tabulate(results, headers='keys'))
+        print("========================================================")
 
         print("MASS FRACTION (w/o margin): {:.3f}".format(self.get_mass_fraction(dv_tot * 1e3)))
         print("MASS FRACTION (w/ margin): {:.3f}".format(self.get_mass_fraction(1.2 * dv_tot * 1e3)))
@@ -242,18 +258,18 @@ class Mission():
         dv_loi = self.calculate_delta_v_loi(final_orbit, self.terminal_altitude)
         dv_loi += np.sqrt(self.moon_mu / self.moon_radius)
         # TEI
-        dv_tei_1, _ = self.system.raise_apogee(rp=initial_orbit.rp, rai=final_orbit.ra, raf=0.)
-        dv_tei = dv_tei_1 + dv_loi # assuming that the fuel expenditure to reach the moon SOI is the same as the LOI
-        tof_tei = np.pi * np.sqrt(final_orbit.sma**3 / self.system.mu) * SECONDS2DAYS
+        dv_tei, tof_tei = self.calculate_delta_v_tei(initial_altitude, terminal_altitude)
+        dv_tei += np.sqrt(self.moon_mu / self.moon_radius)
 
         dv_tot = dv_tli + dv_loi + dv_tei
         tof_tot = tof_tli + tof_tei
 
         print("========================================================")
-        results = {'Type': ['TLI', 'LOI', 'TEI', 'TOTAL', 'MARGIN (20%)', 'ADJUSTED TOTAL'], 'Delta-V (km/s)': [dv_tli, dv_loi, dv_tei, dv_tot, 0.2 * dv_tot, 1.2 * dv_tot], 'Transfer Time (days)': [tof_tli, 'n/a', tof_tei, tof_tot, '', '']}
+        results = {'Type': ['TLI', 'LOI', 'TEI', 'TOTAL', 'MARGIN (20%)', 'ADJUSTED TOTAL'], 'Delta-V (km/s)': [dv_tli, dv_loi, dv_tei, dv_tot, 0.2 * dv_tot, 1.2 * dv_tot], 'Transfer Time (days)': [tof_tli, 0., tof_tei, tof_tot, '', '']}
         print(tabulate(results, headers='keys'))
 
-        print("MASS FRACTION: {:.3f}".format(self.get_mass_fraction(dv_tot * 1e3)))
+        print("MASS FRACTION (w/o margin): {:.3f}".format(self.get_mass_fraction(dv_tot * 1e3)))
+        print("MASS FRACTION (w/ margin): {:.3f}".format(self.get_mass_fraction(1.2 * dv_tot * 1e3)))
 
         return 0
 
@@ -357,18 +373,18 @@ class Mission():
         '''
         LV Insertion
         '''
+        earth = Kepler(pydylan.Body("Earth"))
+        if (target_rp == target_ra):
+            dv, _ = earth.hohmann(ri=0., rf=target_rp)
+        else:
+            dv1, _ = earth.raise_apogee(rp=0., rai=0., raf=target_rp)
+            dv2, _ = earth.raise_apogee(rp=0., rai=target_rp, raf=target_ra)
+            dv = dv1 + dv2
 
-        initial_orbit = ConicSections(radius=self.system.radius, rp=0, ra=0)
-        intermediate_orbit = ConicSections(radius=self.system.radius, rp=0, ra=target_rp)
-        final_orbit = ConicSections(radius=self.system.radius, rp=target_rp, ra=target_ra)
+        dv += np.sqrt(self.earth_mu / self.earth_radius)
+        dv += 1.5 # gravity and atmospheric losses
 
-        # TLI:
-        dv_1, _ = self.system.raise_apogee(rp=initial_orbit.rp, rai=initial_orbit.ra, raf=intermediate_orbit.ra)
-        dv_2, _ = self.system.raise_apogee(rp=intermediate_orbit.ra, rai=intermediate_orbit.ra, raf=final_orbit.ra)
-        dv_lvi = (dv_1 + dv_2) + np.sqrt(self.system.mu / self.system.radius)
-        tof_lvi = np.pi * (np.sqrt(intermediate_orbit.sma**3 / self.system.mu) + np.sqrt(final_orbit.sma**3 / self.system.mu)) * SECONDS2DAYS
-
-        return dv_lvi, tof_lvi 
+        return dv 
 
 if __name__ == '__main__':
 
@@ -378,8 +394,9 @@ if __name__ == '__main__':
     c.concept_1()
     c.concept_2()
     c.concept_3()
-    # c.concept_4()
 
+    # # Writing out the feasible solutions
+    # dv, tof for various feasible
     # a = np.load("./data/c3_feasible.npy")
     # dv = []
     # tof = []
@@ -389,5 +406,39 @@ if __name__ == '__main__':
 
     # print("dv: ", dv)
     # print("tof: ", tof)
+
+    # # Analyzing the LEO vs GTO LV Insertion
+    # dv_vec_1, tof_vec_1 = [], []
+    # dv_vec_2a, tof_vec_2a = [], []
+    # dv_vec_2b, tof_vec_2b = [], []
+    # dv_vec_2c, tof_vec_2c = [], []
+    # rpvec, ravec = np.linspace(0, 2500), 35975
+    # for i, rp in enumerate(rpvec):
+    #     dv_hoh = c.launch_vehicle_insertion(target_rp=rp, target_ra=rp)
+    #     dv_ell_1 = c.launch_vehicle_insertion(target_rp=rp, target_ra=0.5 * ravec)
+    #     dv_ell_2 = c.launch_vehicle_insertion(target_rp=rp, target_ra=ravec)
+    #     dv_ell_3 = c.launch_vehicle_insertion(target_rp=rp, target_ra=1.5 * ravec)
+    #     dv_vec_1.append(dv_hoh)
+    #     dv_vec_2a.append(dv_ell_1)
+    #     dv_vec_2b.append(dv_ell_2)
+    #     dv_vec_2c.append(dv_ell_3)
+
+    # fig, ax = plt.subplots(figsize=(8, 6))
+    # ax_twin = ax.twinx()
+    # ax.plot(rpvec, np.asarray(dv_vec_1), color='black', linewidth=2, label='LEO')
+    # ax_twin.plot(rpvec, np.asarray(dv_vec_2a), color='LightSkyBlue', linewidth=2, label=r'GTO ($r_a$ = {:f} km)'.format(0.5 * ravec))
+    # ax_twin.plot(rpvec, np.asarray(dv_vec_2b), color='DodgerBlue', linewidth=2, label=r'GTO ($r_a$ = {:f} km)'.format(ravec))
+    # ax_twin.plot(rpvec, np.asarray(dv_vec_2c), color='DarkTurquoise', linewidth=2, label=r'GTO ($r_a$ = {:f} km)'.format(1.5 * ravec))
+    # ax.set_xlabel(r"$r_P$ (km)", fontsize=16)
+    # ax.set_ylabel(r"$\Delta V_{LEO}$ (km/s)", fontsize=16)
+    # ax_twin.set_ylabel(r"$\Delta V_{GTO}$ (km/s)", fontsize=16, color='DodgerBlue')
+    # ax_twin.tick_params(axis='y', labelcolor='DodgerBlue')
+    # ax.legend(loc='lower right')
+    # ax_twin.legend(loc='upper right')
+    # ax.set_title(r"Launch Vehicle Insertion: LEO vs GTO", fontsize=18)
+
+    # fig.savefig("./data/leo_vs_gto.png", dpi=300)
+
+    # plt.show()
 
     pydylan.spice.unload_spice(kernels)
