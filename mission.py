@@ -70,6 +70,8 @@ class Mission():
         self.isp = 330
         self.g0 = 9.81
 
+        self.earth_reentry_altitude = 100
+
     def switch_central_body(self):
         tmp = self.system
         self.system = self.other
@@ -94,31 +96,30 @@ class Mission():
             print('{},'.format(entry))
 
     def calculate_delta_v_loi(self, initial_orbit, terminal_altitude):
-        ''' Calculate the velocity in the MCI '''
+        ''' Calculate the velocity to enter a circular LLO '''
 
+        theta = 0. # assuming that the angle between the transfer orbit and the moon's orbit is zero
         terminal_altitude += self.moon_radius
 
         v_moon_rel_earth = self.velocity  # mean orbital velocity of the moon in ECI
-        v_sc_rel_earth = np.sqrt(2 * self.system.mu / initial_orbit.ra - self.system.mu / initial_orbit.sma)  # orbital velocity of the spacecraft in ECI
-        v_sc_inf = np.sqrt(v_moon_rel_earth**2 + v_sc_rel_earth**2 - 2 * v_moon_rel_earth * v_sc_rel_earth)  # excess velocity assuming inclination and fpa to be zero
+        v_sc_rel_earth = np.sqrt(2 * self.earth_mu / initial_orbit.ra - self.earth_mu / initial_orbit.sma)  # orbital velocity of the spacecraft in ECI
+        v_sc_inf = np.sqrt(v_moon_rel_earth**2 + v_sc_rel_earth**2 - 2 * v_moon_rel_earth * v_sc_rel_earth * np.cos(theta))  # excess velocity of the spacecraft in MCI
         v_sc_rel_moon = np.sqrt(v_sc_inf**2 + 2 * self.moon_mu / terminal_altitude)  # spacecraft orbital velocity in LCI
         
-        return np.abs(v_sc_rel_moon - np.sqrt(self.moon_mu / terminal_altitude))
+        return np.abs(v_sc_rel_moon - np.sqrt(self.moon_mu / terminal_altitude)), np.pi * np.sqrt(initial_orbit.sma**3 / self.earth_mu) * SECONDS2DAYS
 
-    def calculate_delta_v_tei(self, initial_altitude, terminal_altitude):
+    def calculate_delta_v_tei(self, initial_altitude, terminal_orbit):
         ''' Calculate the velocity in the MCI '''
 
-        initial_altitude += self.earth_radius
-        terminal_altitude += self.moon_radius
+        theta = 0. # assuming that the angle between the transfer orbit and the moon's orbit is zero
+        initial_altitude += self.moon_radius
 
-        transfer_sma = 0.5 * (initial_altitude + self.distance + terminal_altitude)
-
-        v_moon_rel_earth = self.velocity  # np.sqrt(self.earth_mu / self.distance) # mean orbital velocity of the moon in ECI
-        v_sc_rel_earth = np.sqrt(2 * self.earth_mu / self.distance - self.earth_mu / transfer_sma) # orbital velocity of the spacecraft in ECI
-        v_sc_inf = np.abs(v_moon_rel_earth - v_sc_rel_earth) # excess velocity assuming inclination and fpa to be zero
-        v_sc_rel_moon = np.sqrt(v_sc_inf**2 + 2 * self.moon_mu / terminal_altitude) # spacecraft orbital velocity in LCI
-
-        return abs(v_sc_rel_moon - np.sqrt(self.moon_mu / terminal_altitude)), np.pi * np.sqrt(transfer_sma**3 / self.earth_mu) * SECONDS2DAYS
+        v_moon_rel_earth = self.velocity  # mean orbital velocity of the moon in ECI
+        v_sc_rel_earth = np.sqrt(2 * self.earth_mu / terminal_orbit.ra - self.earth_mu / terminal_orbit.sma)  # orbital velocity of the spacecraft in ECI
+        v_sc_inf = np.sqrt(v_moon_rel_earth**2 + v_sc_rel_earth**2 - 2 * v_moon_rel_earth * v_sc_rel_earth * np.cos(theta))  # excess velocity of the spacecraft in MCI
+        v_sc_rel_moon = np.sqrt(v_sc_inf**2 + 2 * self.moon_mu / initial_altitude)  # spacecraft orbital velocity in LCI
+        
+        return np.abs(v_sc_rel_moon - np.sqrt(self.moon_mu / initial_altitude)), np.pi * np.sqrt(terminal_orbit.sma**3 / self.earth_mu) * SECONDS2DAYS
 
     def concept_1(self):
         '''
@@ -130,9 +131,11 @@ class Mission():
         '''
         initial_altitude, terminal_altitude = self.initial_altitude, self.terminal_altitude
 
-        initial_orbit = ConicSections(radius=self.system.radius, rp=initial_altitude, ra=initial_altitude) # circular
-        intermediate_orbit = ConicSections(radius=self.system.radius, rp=initial_altitude, ra=self.distance / 2) # elliptic (to be used in bi-elliptic transfer), perigee same as initial altitude, apogee arbitrarily chosen [does not affect Delta V]
-        final_orbit = ConicSections(radius=self.system.radius, rp=self.distance + self.moon_radius + terminal_altitude, ra=self.distance + self.moon_radius + terminal_altitude) # circular
+        initial_orbit = ConicSections(radius=self.earth_radius, rp=initial_altitude, ra=initial_altitude) # circular
+        intermediate_orbit = ConicSections(radius=self.earth_radius, rp=initial_altitude, ra=self.distance / 2) # elliptic (to be used in bi-elliptic transfer), perigee same as initial altitude, apogee arbitrarily chosen [does not affect Delta V]
+        final_orbit = ConicSections(radius=self.earth_radius, rp=self.distance + self.moon_radius + terminal_altitude, ra=self.distance + self.moon_radius + terminal_altitude) # circular
+        llo = ConicSections(radius=self.moon_radius, rp=terminal_altitude, ra=terminal_altitude)
+        tei_transfer_orbit = ConicSections(radius=self.earth_radius, rp=initial_altitude, ra=self.distance + self.moon_radius + terminal_altitude)
 
         # TLI
         dv_tli_hoh, tof_tli_hoh = self.system.hohmann(ri=initial_orbit.rp, rf=final_orbit.ra)
@@ -143,7 +146,8 @@ class Mission():
             print("Going forward with Hohmann Transfer", flush=True)
             dv_tli, tof_tli = dv_tli_hoh, tof_tli_hoh
         # LOI
-        dv_loi = self.calculate_delta_v_loi(final_orbit, self.terminal_altitude)
+        dv_loi, _ = self.calculate_delta_v_loi(final_orbit, self.terminal_altitude)
+        tof_loi = 0.
         # LD
         self.switch_central_body() # switch central body to be the moon for {LD, LA and EOI}
         dv_ld, _ = self.system.hohmann(ri=terminal_altitude, rf=0) # from the LLO to the surface of the moon
@@ -151,29 +155,81 @@ class Mission():
         # LA
         dv_la, _ = self.system.hohmann(ri=0, rf=terminal_altitude) # from the surface to the LLO
         dv_la += np.sqrt(self.system.mu / self.system.radius) # excess velocity at the surface of the moon
-        dv_la += (1 / 6 * 1.5) # gravity loss: typical gravity losses for earth ~2km/s, moon's gravity 1/6 of earth's
+        # dv_la += (1 / 6 * 1.5) # gravity loss: typical gravity losses for earth ~2km/s, moon's gravity 1/6 of earth's
         # TEI
         self.switch_central_body() # switch to earth
-        dv_tei, tof_tei = self.calculate_delta_v_tei(initial_altitude, terminal_altitude)
+        dv_tei, tof_tei = self.calculate_delta_v_tei(terminal_altitude, tei_transfer_orbit)
         # ED
-        dv_ed, _ =  self.system.raise_apogee(rp=initial_altitude, rai=self.distance + self.moon_radius + terminal_altitude, raf=0) 
+        dv_ed, _ =  self.system.raise_apogee(rp=initial_altitude, rai=self.distance + self.moon_radius + terminal_altitude, raf=self.earth_reentry_altitude) 
         # dv_ed += np.sqrt(self.system.mu / self.system.radius) # excess velocity at the surface of the earth
 
         dv_tot = dv_tli + dv_loi + dv_ld + dv_la + dv_tei + dv_ed
         tof_tot = tof_tli + tof_tei
 
-        print("========================================================")
-        results = {'Type': ['TLI', 'LOI', 'LD', 'LA', 'TEI', 'ED', 'TOTAL', 'MARGIN (20%)', 'ADJUSTED TOTAL'], 'Delta-V (km/s)': [dv_tli, dv_loi, dv_ld, dv_la, dv_tei, dv_ed, dv_tot, 0.2 * dv_tot, 1.2 * dv_tot], 'Transfer Time (days)': [tof_tli, 0., 'n/a', 'n/a', tof_tei, 'n/a', tof_tot, '', '']}
-        print(tabulate(results, headers='keys'))
-        print("========================================================")
+        dv_vec = np.array([dv_tli, dv_loi, dv_ld, dv_la, dv_tei, dv_ed, dv_tot, 0.2 * dv_tot, 1.2 * dv_tot])
+        lam_vec = 1 - self.get_mass_fraction(dv_vec * 1e3)
+        final_mass_at_end_of_stage, propellant_mass_consumed = np.zeros_like(lam_vec), np.zeros_like(lam_vec)
+        for i, lam_i in enumerate(lam_vec):
+            if (i==0):
+                final_mass_at_end_of_stage[i] = lam_i * 45
+                propellant_mass_consumed[i] = (1- lam_i) * 45
+            else:
+                final_mass_at_end_of_stage[i] = lam_i * final_mass_at_end_of_stage[i-1]
+                propellant_mass_consumed[i] = (1 - lam_i) * final_mass_at_end_of_stage[i-1]
+        
+        final_mass_at_end_of_stage[-3] = lam_vec[-3] * 45
+        propellant_mass_consumed[-3] = (1 - lam_vec[-3]) * 45
+        final_mass_at_end_of_stage[-1] = lam_vec[-1] * 45
+        propellant_mass_consumed[-1] = (1 - lam_vec[-1]) * 45
 
-        print("========================================================")
+        print("=========================================================================================")
+        results = {'Type': ['TLI', 'LOI', 'LD', 'LA', 'TEI', 'ED', 'TOTAL', 'MARGIN (20%)', 'ADJUSTED TOTAL'], 'Delta-V (km/s)': [dv_tli, dv_loi, dv_ld, dv_la, dv_tei, dv_ed, dv_tot, 0.2 * dv_tot, 1.2 * dv_tot], 'Transfer Time (days)': [tof_tli, tof_loi, 'n/a', 'n/a', tof_tei, 'n/a', tof_tot, '', tof_tot],
+                            'Mass At the Start Of Phase (mT)': [45, final_mass_at_end_of_stage[0], final_mass_at_end_of_stage[1], final_mass_at_end_of_stage[2], final_mass_at_end_of_stage[3], final_mass_at_end_of_stage[4], 45, '', 45],
+                            'Propellant Mass Consumed (mT)': [propellant_mass_consumed[0], propellant_mass_consumed[1], propellant_mass_consumed[2], propellant_mass_consumed[3], propellant_mass_consumed[4], propellant_mass_consumed[5], propellant_mass_consumed[6], '', propellant_mass_consumed[8]],
+                            'Mass At the End Of Phase (mT)': [final_mass_at_end_of_stage[0], final_mass_at_end_of_stage[1], final_mass_at_end_of_stage[2], final_mass_at_end_of_stage[3], final_mass_at_end_of_stage[4], final_mass_at_end_of_stage[5], final_mass_at_end_of_stage[6], '', final_mass_at_end_of_stage[8]]}
+        print(tabulate(results, headers='keys'))
+        print("=========================================================================================")
+
+        print("=========================================================================================")
         results = {'Type': ['LD', 'LA', 'LD w/ margin', 'LA w/ margin'], 'Delta-V (km/s)': [dv_ld, dv_la, 1.2 * dv_ld, 1.2 * dv_la], 'Propellant Mass Margin': [self.get_mass_fraction(dv_ld * 1e3), self.get_mass_fraction(dv_la * 1e3), self.get_mass_fraction(1.2 * dv_ld * 1e3), self.get_mass_fraction(1.2 * dv_la * 1e3)]}
         print(tabulate(results, headers='keys'))
-        print("========================================================")
-
+        print("=========================================================================================")
         print("MASS FRACTION (w/o margin): {:.3f}".format(self.get_mass_fraction(dv_tot * 1e3)))
         print("MASS FRACTION (w/ margin): {:.3f}".format(self.get_mass_fraction(1.2 * dv_tot * 1e3)))
+        print("=========================================================================================")
+
+        mi_ld = np.linspace(0., final_mass_at_end_of_stage[1], 1000)
+        mp_ld = (1 - lam_vec[2]) * mi_ld
+        mf_ld = mi_ld - mp_ld
+        mi_la = mf_ld
+        mp_la = (1 - lam_vec[3]) * mi_la
+        mf_la = mi_la - mp_la
+
+        mi_tei = final_mass_at_end_of_stage[1] - mi_ld + mf_la
+        mp_tei = (1 - lam_vec[4]) * mi_tei
+        mf_tei = mi_tei - mp_tei
+        mi_ed = mf_tei
+        mp_ed = (1 - lam_vec[5]) * mi_ed
+        mf_ed = mi_ed - mp_ed
+
+        fig, ax = plt.subplots(nrows=2, ncols=1, figsize=(8, 6))
+        ax[0].plot(mi_ld, mp_ld, "DodgerBlue", label=r"$m_p^{LD}$")
+        ax[0].plot(mi_ld, mp_la, "DeepSkyBlue", label=r"$m_p^{LA}$")
+        ax[0].plot(mi_ld, mp_tei, "DarkTurquoise", label=r"$m_f^{TEI}$")
+        ax[0].plot(mi_ld, mp_ed, "Cyan", label=r"$m_f^{ED}$")
+        # ax[0].set_xlabel(r"$m_i^{capsule}$ (mT)", fontsize=16)
+        ax[0].set_ylabel("Propellant Mass (mT)", fontsize=16)
+        ax[0].legend()
+
+        ax[1].plot(mi_ld, mf_ld, "DodgerBlue", label=r"$m_f^{LD}$")
+        ax[1].plot(mi_ld, mf_la, "DeepSkyBlue", label=r"$m_f^{LA}$")
+        ax[1].plot(mi_ld, mf_tei, "DarkTurquoise", label=r"$m_f^{TEI}$")
+        ax[1].plot(mi_ld, mf_ed, "Cyan", label=r"$m_f^{ED}$")
+        ax[1].set_ylabel("Final Mass (mT)", fontsize=16)
+        ax[1].set_xlabel(r"$m_i^{capsule}$ (mT)", fontsize=16)
+        ax[1].legend()
+
+        fig.savefig("c1_mass_breakdown.png", dpi=300)
 
         return 0
 
@@ -193,6 +249,8 @@ class Mission():
         initial_orbit = ConicSections(radius=self.system.radius, rp=initial_altitude, ra=35975) # elliptic
         intermediate_orbit = ConicSections(radius=self.system.radius, rp=initial_altitude, ra=self.distance / 2) # elliptic
         final_orbit = ConicSections(radius=self.system.radius, rp=initial_altitude, ra=self.distance + self.moon_radius + terminal_altitude) # elliptic
+        llo = ConicSections(radius=self.moon_radius, rp=terminal_altitude, ra=terminal_altitude)
+        tei_transfer_orbit = ConicSections(radius=self.earth_radius, rp=initial_altitude, ra=self.distance + self.moon_radius + terminal_altitude)
 
         # TLI
         dv_tli_1, _ = self.system.raise_apogee(rp=initial_orbit.rp, rai=initial_orbit.ra, raf=intermediate_orbit.ra)
@@ -200,7 +258,8 @@ class Mission():
         dv_tli = dv_tli_1 + dv_tli_2
         tof_tli = (2 * np.pi * np.sqrt(intermediate_orbit.sma**3 / self.system.mu) + np.pi * np.sqrt(final_orbit.sma**3 / self.system.mu)) * SECONDS2DAYS # one intermediate phasing orbit period + half last phasing orbit period
         # LOI
-        dv_loi = self.calculate_delta_v_loi(final_orbit, self.terminal_altitude)
+        dv_loi, _ = self.calculate_delta_v_loi(final_orbit, terminal_altitude)
+        tof_loi = 0.
         # LD
         self.switch_central_body() # switch central body to be the moon for {LD, LA and TEI+EOI}
         dv_ld, _ = self.system.hohmann(ri=terminal_altitude, rf=0)
@@ -208,29 +267,80 @@ class Mission():
         # LA
         dv_la, _ = self.system.hohmann(ri=0, rf=terminal_altitude)
         dv_la += np.sqrt(self.system.mu / self.system.radius)
-        dv_la += (1 / 6 * 1.5) # gravity losses, moon's gravity 1/6 of earth's, typical gravity losses for earth ~2km/s
+        # dv_la += (1 / 6 * 1.5) # gravity losses, moon's gravity 1/6 of earth's, typical gravity losses for earth ~2km/s
         # TEI: 
         self.switch_central_body() # switch to earth
-        dv_tei, tof_tei = self.calculate_delta_v_tei(initial_altitude, terminal_altitude)
+        dv_tei, tof_tei = self.calculate_delta_v_tei(terminal_altitude, tei_transfer_orbit)
         # ED
-        dv_ed, _ =  self.system.raise_apogee(rp=initial_altitude, rai=self.distance + self.moon_radius + terminal_altitude, raf=0)
+        dv_ed, _ =  self.system.raise_apogee(rp=initial_altitude, rai=self.distance + self.moon_radius + terminal_altitude, raf=self.earth_reentry_altitude) 
         # dv_ed += np.sqrt(self.system.mu / self.system.radius) # excess velocity at the surface of the earth
 
         dv_tot = dv_tli + dv_loi + dv_ld + dv_la + dv_tei + dv_ed
         tof_tot = tof_tli + tof_tei
 
-        print("========================================================")
-        results = {'Type': ['TLI', 'LOI', 'LD', 'LA', 'TEI', 'ED', 'TOTAL', 'MARGIN (20%)', 'ADJUSTED TOTAL'], 'Delta-V (km/s)': [dv_tli, dv_loi, dv_ld, dv_la, dv_tei, dv_ed, dv_tot, 0.2 * dv_tot, 1.2 * dv_tot], 'Transfer Time (days)': [tof_tli, 0., 'n/a', 'n/a', tof_tei, 'n/a', tof_tot, '', '']}
-        print(tabulate(results, headers='keys'))
-        print("========================================================")
+        dv_vec = np.array([dv_tli, dv_loi, dv_ld, dv_la, dv_tei, dv_ed, dv_tot, 0.2 * dv_tot, 1.2 * dv_tot])
+        lam_vec = 1 - self.get_mass_fraction(dv_vec * 1e3)
+        final_mass_at_end_of_stage, propellant_mass_consumed = np.zeros_like(lam_vec), np.zeros_like(lam_vec)
+        for i, lam_i in enumerate(lam_vec):
+            if (i==0):
+                final_mass_at_end_of_stage[i] = lam_i * 45
+                propellant_mass_consumed[i] = (1- lam_i) * 45
+            else:
+                final_mass_at_end_of_stage[i] = lam_i * final_mass_at_end_of_stage[i-1]
+                propellant_mass_consumed[i] = (1- lam_i) * final_mass_at_end_of_stage[i-1]
+        final_mass_at_end_of_stage[-3] = lam_vec[-3] * 45
+        propellant_mass_consumed[-3] = (1 - lam_vec[-3]) * 45
+        final_mass_at_end_of_stage[-1] = lam_vec[-1] * 45
+        propellant_mass_consumed[-1] = (1 - lam_vec[-1]) * 45
 
-        print("========================================================")
+        print("=========================================================================================")
+        results = {'Type': ['TLI', 'LOI', 'LD', 'LA', 'TEI', 'ED', 'TOTAL', 'MARGIN (20%)', 'ADJUSTED TOTAL'], 'Delta-V (km/s)': [dv_tli, dv_loi, dv_ld, dv_la, dv_tei, dv_ed, dv_tot, 0.2 * dv_tot, 1.2 * dv_tot], 'Transfer Time (days)': [tof_tli, tof_loi, 'n/a', 'n/a', tof_tei, 'n/a', tof_tot, '', tof_tot],
+                            'Mass At the Start Of Phase (mT)': [45, final_mass_at_end_of_stage[0], final_mass_at_end_of_stage[1], final_mass_at_end_of_stage[2], final_mass_at_end_of_stage[3], final_mass_at_end_of_stage[4], 45, '', 45],
+                            'Propellant Mass Consumed (mT)': [propellant_mass_consumed[0], propellant_mass_consumed[1], propellant_mass_consumed[2], propellant_mass_consumed[3], propellant_mass_consumed[4], propellant_mass_consumed[5], propellant_mass_consumed[6], '', propellant_mass_consumed[8]],
+                            'Mass At the End Of Phase (mT)': [final_mass_at_end_of_stage[0], final_mass_at_end_of_stage[1], final_mass_at_end_of_stage[2], final_mass_at_end_of_stage[3], final_mass_at_end_of_stage[4], final_mass_at_end_of_stage[5], final_mass_at_end_of_stage[6], '', final_mass_at_end_of_stage[8]]}
+        print(tabulate(results, headers='keys'))
+        print("=========================================================================================")
+
+        print("=========================================================================================")
         results = {'Type': ['LD', 'LA', 'LD w/ margin', 'LA w/ margin'], 'Delta-V (km/s)': [dv_ld, dv_la, 1.2 * dv_ld, 1.2 * dv_la], 'Propellant Mass Margin': [self.get_mass_fraction(dv_ld * 1e3), self.get_mass_fraction(dv_la * 1e3), self.get_mass_fraction(1.2 * dv_ld * 1e3), self.get_mass_fraction(1.2 * dv_la * 1e3)]}
         print(tabulate(results, headers='keys'))
-        print("========================================================")
-
+        print("=========================================================================================")
         print("MASS FRACTION (w/o margin): {:.3f}".format(self.get_mass_fraction(dv_tot * 1e3)))
         print("MASS FRACTION (w/ margin): {:.3f}".format(self.get_mass_fraction(1.2 * dv_tot * 1e3)))
+        print("=========================================================================================")
+
+        mi_ld = np.linspace(0., final_mass_at_end_of_stage[1], 1000)
+        mp_ld = (1 - lam_vec[2]) * mi_ld
+        mf_ld = mi_ld - mp_ld
+        mi_la = mf_ld
+        mp_la = (1 - lam_vec[3]) * mi_la
+        mf_la = mi_la - mp_la
+
+        mi_tei = final_mass_at_end_of_stage[1] - mi_ld + mf_la
+        mp_tei = (1 - lam_vec[4]) * mi_tei
+        mf_tei = mi_tei - mp_tei
+        mi_ed = mf_tei
+        mp_ed = (1 - lam_vec[5]) * mi_ed
+        mf_ed = mi_ed - mp_ed
+
+        fig, ax = plt.subplots(nrows=2, ncols=1, figsize=(8, 6))
+        ax[0].plot(mi_ld, mp_ld, "DodgerBlue", label=r"$m_p^{LD}$")
+        ax[0].plot(mi_ld, mp_la, "DeepSkyBlue", label=r"$m_p^{LA}$")
+        ax[0].plot(mi_ld, mp_tei, "DarkTurquoise", label=r"$m_f^{TEI}$")
+        ax[0].plot(mi_ld, mp_ed, "Cyan", label=r"$m_f^{ED}$")
+        # ax[0].set_xlabel(r"$m_i^{capsule}$ (mT)", fontsize=16)
+        ax[0].set_ylabel("Propellant Mass (mT)", fontsize=16)
+        ax[0].legend()
+
+        ax[1].plot(mi_ld, mf_ld, "DodgerBlue", label=r"$m_f^{LD}$")
+        ax[1].plot(mi_ld, mf_la, "DeepSkyBlue", label=r"$m_f^{LA}$")
+        ax[1].plot(mi_ld, mf_tei, "DarkTurquoise", label=r"$m_f^{TEI}$")
+        ax[1].plot(mi_ld, mf_ed, "Cyan", label=r"$m_f^{ED}$")
+        ax[1].set_ylabel("Final Mass (mT)", fontsize=16)
+        ax[1].set_xlabel(r"$m_i^{capsule}$ (mT)", fontsize=16)
+        ax[1].legend()
+
+        fig.savefig("c2_mass_breakdown.png", dpi=300)
 
         return 0
 
@@ -248,6 +358,7 @@ class Mission():
         initial_orbit = ConicSections(radius=self.system.radius, rp=initial_altitude, ra=35975) # elliptic
         intermediate_orbit = ConicSections(radius=self.system.radius, rp=initial_altitude, ra=self.distance / 2) # elliptic
         final_orbit = ConicSections(radius=self.system.radius, rp=initial_altitude, ra=self.distance + self.moon_radius + terminal_altitude) # elliptic
+        tei_transfer_orbit = ConicSections(radius=self.earth_radius, rp=0., ra=self.distance + self.moon_radius)
 
         # TLI:
         dv_tli_1, _ = self.system.raise_apogee(rp=initial_orbit.rp, rai=initial_orbit.ra, raf=intermediate_orbit.ra)
@@ -255,21 +366,38 @@ class Mission():
         dv_tli = dv_tli_1 + dv_tli_2
         tof_tli = (2 * np.pi * np.sqrt(intermediate_orbit.sma**3 / self.system.mu) + np.pi * np.sqrt(final_orbit.sma**3 / self.system.mu)) * SECONDS2DAYS # one intermediate phasing orbit period + half last phasing orbit period
         # LOI
-        dv_loi = self.calculate_delta_v_loi(final_orbit, self.terminal_altitude)
+        dv_loi, _ = self.calculate_delta_v_loi(final_orbit, terminal_altitude)
         dv_loi += np.sqrt(self.moon_mu / self.moon_radius)
+        tof_loi = 0.
         # TEI
-        dv_tei, tof_tei = self.calculate_delta_v_tei(initial_altitude, terminal_altitude)
+        dv_tei, tof_tei = self.calculate_delta_v_tei(terminal_altitude, tei_transfer_orbit)
         dv_tei += np.sqrt(self.moon_mu / self.moon_radius)
 
         dv_tot = dv_tli + dv_loi + dv_tei
         tof_tot = tof_tli + tof_tei
 
-        print("========================================================")
-        results = {'Type': ['TLI', 'LOI', 'TEI', 'TOTAL', 'MARGIN (20%)', 'ADJUSTED TOTAL'], 'Delta-V (km/s)': [dv_tli, dv_loi, dv_tei, dv_tot, 0.2 * dv_tot, 1.2 * dv_tot], 'Transfer Time (days)': [tof_tli, 0., tof_tei, tof_tot, '', '']}
-        print(tabulate(results, headers='keys'))
+        dv_vec = np.array([dv_tli, dv_loi, dv_tei, dv_tot, 0.2 * dv_tot, 1.2 * dv_tot])
+        lam_vec = 1 - self.get_mass_fraction(dv_vec * 1e3)
+        final_mass_at_end_of_stage, propellant_mass_consumed = np.zeros_like(lam_vec), np.zeros_like(lam_vec)
+        for i, lam_i in enumerate(lam_vec):
+            if (i==0):
+                final_mass_at_end_of_stage[i] = lam_i * 45
+                propellant_mass_consumed[i] = (1- lam_i) * 45
+            else:
+                final_mass_at_end_of_stage[i] = lam_i * final_mass_at_end_of_stage[i-1]
+                propellant_mass_consumed[i] = (1- lam_i) * final_mass_at_end_of_stage[i-1]
+        final_mass_at_end_of_stage[-3] = lam_vec[-3] * 45
+        propellant_mass_consumed[-3] = (1 - lam_vec[-3]) * 45
+        final_mass_at_end_of_stage[-1] = lam_vec[-1] * 45
+        propellant_mass_consumed[-1] = (1 - lam_vec[-1]) * 45
 
-        print("MASS FRACTION (w/o margin): {:.3f}".format(self.get_mass_fraction(dv_tot * 1e3)))
-        print("MASS FRACTION (w/ margin): {:.3f}".format(self.get_mass_fraction(1.2 * dv_tot * 1e3)))
+        print("=========================================================================================")
+        results = {'Type': ['TLI', 'LOI', 'TEI', 'TOTAL', 'MARGIN (20%)', 'ADJUSTED TOTAL'], 'Delta-V (km/s)': [dv_tli, dv_loi, dv_tei, dv_tot, 0.2 * dv_tot, 1.2 * dv_tot], 'Transfer Time (days)': [tof_tli, tof_loi, tof_tei, tof_tot, '', tof_tot],
+                            'Mass At the Start Of Phase (mT)': [45, final_mass_at_end_of_stage[0], final_mass_at_end_of_stage[1], 45, '', 45],
+                            'Propellant Mass Consumed (mT)': [propellant_mass_consumed[0], propellant_mass_consumed[1], propellant_mass_consumed[2], propellant_mass_consumed[3], '', propellant_mass_consumed[5]],
+                            'Mass At the End Of Phase (mT)': [final_mass_at_end_of_stage[0], final_mass_at_end_of_stage[1], final_mass_at_end_of_stage[2], final_mass_at_end_of_stage[3], '', final_mass_at_end_of_stage[5]]}
+        print(tabulate(results, headers='keys'))
+        print("=========================================================================================")
 
         return 0
 
@@ -423,21 +551,22 @@ if __name__ == '__main__':
     #     dv_vec_2b.append(dv_ell_2)
     #     dv_vec_2c.append(dv_ell_3)
 
-    # fig, ax = plt.subplots(figsize=(8, 6))
-    # ax_twin = ax.twinx()
-    # ax.plot(rpvec, np.asarray(dv_vec_1), color='black', linewidth=2, label='LEO')
-    # ax_twin.plot(rpvec, np.asarray(dv_vec_2a), color='LightSkyBlue', linewidth=2, label=r'GTO ($r_a$ = {:f} km)'.format(0.5 * ravec))
-    # ax_twin.plot(rpvec, np.asarray(dv_vec_2b), color='DodgerBlue', linewidth=2, label=r'GTO ($r_a$ = {:f} km)'.format(ravec))
-    # ax_twin.plot(rpvec, np.asarray(dv_vec_2c), color='DarkTurquoise', linewidth=2, label=r'GTO ($r_a$ = {:f} km)'.format(1.5 * ravec))
-    # ax.set_xlabel(r"$r_P$ (km)", fontsize=16)
-    # ax.set_ylabel(r"$\Delta V_{LEO}$ (km/s)", fontsize=16)
-    # ax_twin.set_ylabel(r"$\Delta V_{GTO}$ (km/s)", fontsize=16, color='DodgerBlue')
-    # ax_twin.tick_params(axis='y', labelcolor='DodgerBlue')
-    # ax.legend(loc='lower right')
-    # ax_twin.legend(loc='upper right')
-    # ax.set_title(r"Launch Vehicle Insertion: LEO vs GTO", fontsize=18)
-
-    # fig.savefig("./data/leo_vs_gto.png", dpi=300)
+    # fig1, ax1 = plt.subplots(figsize=(8, 6))
+    # fig2, ax2 = plt.subplots(figsize=(8, 6))
+    # # ax_twin = ax.twinx()
+    # ax1.plot(rpvec, np.asarray(dv_vec_1), color='black', linewidth=2, label='LEO')
+    # ax1.set_xlabel(r"$r_P$ (km)", fontsize=16)
+    # ax1.set_ylabel(r"$\Delta V_{LEO}$ (km/s)", fontsize=16)
+    
+    # ax2.plot(rpvec, np.asarray(dv_vec_2a), color='LightSkyBlue', linewidth=2, label=r'GTO ($r_a$ = {:.3f} km)'.format(0.5 * ravec))
+    # ax2.plot(rpvec, np.asarray(dv_vec_2b), color='DodgerBlue', linewidth=2, label=r'GTO ($r_a$ = {:.3f} km)'.format(ravec))
+    # ax2.plot(rpvec, np.asarray(dv_vec_2c), color='DarkTurquoise', linewidth=2, label=r'GTO ($r_a$ = {:.3f} km)'.format(1.5 * ravec))
+    # ax1.set_xlabel(r"$r_P$ (km)", fontsize=16)
+    # ax2.set_ylabel(r"$\Delta V_{GTO}$ (km/s)", fontsize=16)
+    # ax2.legend(loc='upper right')
+    
+    # fig1.savefig("./data/leo_lv_insertion.png", dpi=300)
+    # fig2.savefig("./data/geo_lv_insertion.png", dpi=300)
 
     # plt.show()
 
