@@ -302,7 +302,7 @@ class Mission():
                    'Mass At the End Of Phase (mT)': mf_to_print}
         results_table = tabulate(results, headers='keys')
         print(results_table)
-        print("=========================================================================================")
+        # print("=========================================================================================")
         plot_title = "LEO"
         if self.lowspeed_reentry:
             plot_title += " low-speed"
@@ -383,7 +383,7 @@ class Mission():
         if (mf_la[-1] >= self.example_lunar_lander_mass):
             ax[1].scatter(mf_la[minidx], example_mass_fraction, s=100, c='k')
             ax[1].scatter(mf_la[minidx], example_adjusted_mass_fraction, s=100, c='k')
-        print("Mass Fraction: {:f}, Lander-Removed Mass Fraction: {:f}".format(example_mass_fraction, example_adjusted_mass_fraction))
+        print("2-STAGE Mass Fraction: {:f}, 2-STAGE Lander-Removed Mass Fraction: {:f}".format(example_mass_fraction, example_adjusted_mass_fraction))
 
         fig_p.savefig(self.path_to_figure_dir + "/leo_prop_mass_breakdown" + string_to_append, dpi=300)    
         fig.savefig(self.path_to_figure_dir + "/leo_mass_breakdown" + string_to_append, dpi=300)
@@ -527,7 +527,7 @@ class Mission():
                 print("GTO to LLO Budget For High-Speed With Margin")
             else:
                 print("GTO to LLO Budget For High-Speed Without Margin")
-        print("=========================================================================================")
+        # print("=========================================================================================")
         results = {'Type': phase_to_print, 
                    'Delta-V (km/s)': dv_to_print, 
                    'Transfer Time (days)': tof_to_print,
@@ -536,7 +536,7 @@ class Mission():
                    'Mass At the End Of Phase (mT)': mf_to_print}
         results_table = tabulate(results, headers='keys')
         print(results_table)
-        print("=========================================================================================")
+        # print("=========================================================================================")
         plot_title = "GTO"
         if self.lowspeed_reentry:
             plot_title += " low-speed"
@@ -619,7 +619,7 @@ class Mission():
         if (mf_la[-1] >= self.example_lunar_lander_mass):
             ax[1].scatter(mf_la[minidx], example_mass_fraction, s=100, c='k')
             ax[1].scatter(mf_la[minidx], example_adjusted_mass_fraction, s=100, c='k')
-        print("Mass Fraction: {:f}, Lander-Removed Mass Fraction: {:f}".format(example_mass_fraction, example_adjusted_mass_fraction))
+        print("2-STAGE Mass Fraction: {:f}, 2-STAGE Lander-Removed Mass Fraction: {:f}".format(example_mass_fraction, example_adjusted_mass_fraction))
 
         fig_p.savefig(self.path_to_figure_dir + "/gto_prop_mass_breakdown" + string_to_append, dpi=300)    
         fig.savefig(self.path_to_figure_dir + "/gto_mass_breakdown" + string_to_append, dpi=300)
