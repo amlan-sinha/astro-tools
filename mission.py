@@ -14,15 +14,15 @@ from keplerian.Bodies import Earth, Moon
 
 class Mission():
 
-    def __init__(self, initial_mass=45, lunar_lander_mass=(2445 + 2034) * 1e-3, isp=330, earth_reentry_altitude=100, minimum_reentry_speed=7.8, if_lowspeed_reentry=True, if_margin=True):
+    def __init__(self, system_parameters, trade_parameters, if_lowspeed_reentry=True, if_margin=True):
 
         self.lowspeed_reentry = if_lowspeed_reentry
         self.margin = 0.2 if if_margin else 0.
         self.g0 = 9.81 # m/s^2
-        self.isp = isp # s
-        self.initial_mass, self.example_lunar_lander_mass = initial_mass, lunar_lander_mass # mT
-        self.earth_reentry_altitude = earth_reentry_altitude # km
-        self.minimum_reentry_speed = minimum_reentry_speed # km/s
+        self.isp = system_parameters["isp"] # s
+        self.initial_mass, self.example_lunar_lander_mass = system_parameters["initial_mass"], system_parameters["lunar_lander_mass"] # mT
+        self.earth_reentry_altitude = trade_parameters["earth_reentry_altitude"] # km
+        self.minimum_reentry_speed = trade_parameters["minimum_reentry_speed"] # km/s
 
         earth, moon = Earth(), Moon()
 
@@ -30,8 +30,8 @@ class Mission():
         self.earth_radius, self.moon_radius = earth.equatorial_radius, moon.equatorial_radius
         self.earth_mu, self.moon_mu = earth.mu, moon.mu
 
-        self.initial_altitude, self.terminal_altitude = 500, 100 # km
-        self.initial_gto_perigee_altitude, self.initial_gto_apogee_altitude = 200, 35975 # km
+        self.initial_altitude, self.terminal_altitude = trade_parameters["leo_altitude"], trade_parameters["llo_altitude"] # 500, 100 # km
+        self.initial_gto_perigee_altitude, self.initial_gto_apogee_altitude = trade_parameters["gto_perigee_altitude"], trade_parameters["gto_apogee_altitude"] # 200, 35975 # km
         initial_perigee, initial_apogee = self.initial_gto_perigee_altitude + self.earth_radius, self.initial_gto_apogee_altitude + self.earth_radius # km
         self.initial_sma, self.initial_eccentricity = 0.5 * (initial_perigee + initial_apogee), (initial_apogee - initial_perigee) / (initial_apogee + initial_perigee) # km
         
@@ -638,28 +638,34 @@ class Mission():
 if __name__ == '__main__':
 
     # Example Use Case:
-    initial_mass, lunar_lander_mass = 45, (2445 + 2034) * 1e-3 # mT
-    isp = 330 # s
-    earth_reentry_altitude = 100 # km
-    minimum_reentry_speed = 7.8 # km / s
+    system_parameters_dict = {"initial_mass": 45,
+                              "lunar_lander_mass": (2445 + 2034) * 1e-3,
+                              "isp": 330}
+
+    trade_parameters_dict = {"leo_altitude": 500,
+                             "llo_altitude": 100,
+                             "gto_perigee_altitude": 200,
+                             "gto_apogee_altitude": 35975,
+                             "earth_reentry_altitude": 150,
+                             "minimum_reentry_speed": 7.8}
 
     # High-speed, no margin
-    c1 = Mission(initial_mass=initial_mass, lunar_lander_mass=lunar_lander_mass, isp=isp, earth_reentry_altitude=earth_reentry_altitude, minimum_reentry_speed=minimum_reentry_speed, if_lowspeed_reentry=False, if_margin=False)
+    c1 = Mission(system_parameters=system_parameters_dict, trade_parameters=trade_parameters_dict, if_lowspeed_reentry=False, if_margin=False)
     c1.LEO_to_LLO()
     c1.GTO_to_LLO()
 
     # High-speed, w/ margin
-    c2 = Mission(initial_mass=initial_mass, lunar_lander_mass=lunar_lander_mass, isp=isp, earth_reentry_altitude=earth_reentry_altitude, minimum_reentry_speed=minimum_reentry_speed, if_lowspeed_reentry=False, if_margin=True)
+    c2 = Mission(system_parameters=system_parameters_dict, trade_parameters=trade_parameters_dict, if_lowspeed_reentry=False, if_margin=True)
     c2.LEO_to_LLO()
     c2.GTO_to_LLO()
     
     # Low-speed, no margin
-    c3 = Mission(initial_mass=initial_mass, lunar_lander_mass=lunar_lander_mass, isp=isp, earth_reentry_altitude=earth_reentry_altitude, minimum_reentry_speed=minimum_reentry_speed, if_lowspeed_reentry=True, if_margin=False)
+    c3 = Mission(system_parameters=system_parameters_dict, trade_parameters=trade_parameters_dict, if_lowspeed_reentry=True, if_margin=False)
     c3.LEO_to_LLO()
     c3.GTO_to_LLO()
 
     # Low-speed, w/ margin
-    c4 = Mission(initial_mass=initial_mass, lunar_lander_mass=lunar_lander_mass, isp=isp, earth_reentry_altitude=earth_reentry_altitude, minimum_reentry_speed=minimum_reentry_speed, if_lowspeed_reentry=True, if_margin=True)
+    c4 = Mission(system_parameters=system_parameters_dict, trade_parameters=trade_parameters_dict, if_lowspeed_reentry=True, if_margin=True)
     c4.LEO_to_LLO()
     c4.GTO_to_LLO()
 
