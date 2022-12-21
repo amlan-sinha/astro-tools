@@ -14,7 +14,15 @@ from keplerian.Bodies import Earth, Moon
 
 class Mission():
 
-    def __init__(self, if_lowspeed_reentry=True, if_margin=True):
+    def __init__(self, initial_mass=45, lunar_lander_mass=(2445 + 2034) * 1e-3, isp=330, earth_reentry_altitude=100, minimum_reentry_speed=7.8, if_lowspeed_reentry=True, if_margin=True):
+
+        self.lowspeed_reentry = if_lowspeed_reentry
+        self.margin = 0.2 if if_margin else 0.
+        self.g0 = 9.81 # m/s^2
+        self.isp = isp # s
+        self.initial_mass, self.example_lunar_lander_mass = initial_mass, lunar_lander_mass # mT
+        self.earth_reentry_altitude = earth_reentry_altitude # km
+        self.minimum_reentry_speed = minimum_reentry_speed # km/s
 
         earth, moon = Earth(), Moon()
 
@@ -26,14 +34,6 @@ class Mission():
         self.initial_gto_perigee_altitude, self.initial_gto_apogee_altitude = 200, 35975 # km
         initial_perigee, initial_apogee = self.initial_gto_perigee_altitude + self.earth_radius, self.initial_gto_apogee_altitude + self.earth_radius # km
         self.initial_sma, self.initial_eccentricity = 0.5 * (initial_perigee + initial_apogee), (initial_apogee - initial_perigee) / (initial_apogee + initial_perigee) # km
-
-        
-        self.lowspeed_reentry = if_lowspeed_reentry
-        self.margin = 0.2 if if_margin else 0.
-        self.g0, self.isp = 9.81, 330, # m/s^2, s
-        self.initial_mass, self.example_lunar_lander_mass = 45, (2445 + 2034) * 1e-3 # mT
-        self.earth_reentry_altitude = 150 # km
-        self.minimum_reentry_speed = 7.8 # km/s
         
         self.distance = moon.semimajor_axis # km
         self.velocity = np.sqrt(moon.mu_of_parent / moon.semimajor_axis) # km / s
@@ -383,6 +383,10 @@ class Mission():
         if (mf_la[-1] >= self.example_lunar_lander_mass):
             ax[1].scatter(mf_la[minidx], example_mass_fraction, s=100, c='k')
             ax[1].scatter(mf_la[minidx], example_adjusted_mass_fraction, s=100, c='k')
+            ax[1].vlines(mf_la[minidx], 0, example_mass_fraction, color='black', linestyle="dashed")
+            ax[1].vlines(mf_la[minidx], 0, example_adjusted_mass_fraction, color='black', linestyle="dashed")
+            ax[1].hlines(example_mass_fraction, 0, mf_la[minidx], color='black', linestyle="dashed")
+            ax[1].hlines(example_adjusted_mass_fraction, 0, mf_la[minidx], color='black', linestyle="dashed")
         print("2-STAGE Mass Fraction: {:f}, 2-STAGE Lander-Removed Mass Fraction: {:f}".format(example_mass_fraction, example_adjusted_mass_fraction))
 
         fig_p.savefig(self.path_to_figure_dir + "/leo_prop_mass_breakdown" + string_to_append, dpi=300)    
@@ -619,6 +623,10 @@ class Mission():
         if (mf_la[-1] >= self.example_lunar_lander_mass):
             ax[1].scatter(mf_la[minidx], example_mass_fraction, s=100, c='k')
             ax[1].scatter(mf_la[minidx], example_adjusted_mass_fraction, s=100, c='k')
+            ax[1].vlines(mf_la[minidx], 0, example_mass_fraction, color='black', linestyle="dashed")
+            ax[1].vlines(mf_la[minidx], 0, example_adjusted_mass_fraction, color='black', linestyle="dashed")
+            ax[1].hlines(example_mass_fraction, 0, mf_la[minidx], color='black', linestyle="dashed")
+            ax[1].hlines(example_adjusted_mass_fraction, 0, mf_la[minidx], color='black', linestyle="dashed")
         print("2-STAGE Mass Fraction: {:f}, 2-STAGE Lander-Removed Mass Fraction: {:f}".format(example_mass_fraction, example_adjusted_mass_fraction))
 
         fig_p.savefig(self.path_to_figure_dir + "/gto_prop_mass_breakdown" + string_to_append, dpi=300)    
@@ -629,18 +637,32 @@ class Mission():
 
 if __name__ == '__main__':
 
-    c1 = Mission(if_lowspeed_reentry=False, if_margin=False)
+    # Example Use Case:
+    initial_mass, lunar_lander_mass = 45, (2445 + 2034) * 1e-3 # mT
+    isp = 330 # s
+    earth_reentry_altitude = 100 # km
+    minimum_reentry_speed = 7.8 # km / s
+
+    # High-speed, no margin
+    c1 = Mission(initial_mass=initial_mass, lunar_lander_mass=lunar_lander_mass, isp=isp, earth_reentry_altitude=earth_reentry_altitude, minimum_reentry_speed=minimum_reentry_speed, if_lowspeed_reentry=False, if_margin=False)
     c1.LEO_to_LLO()
     c1.GTO_to_LLO()
 
-    c2 = Mission(if_lowspeed_reentry=False, if_margin=True)
+    # High-speed, w/ margin
+    c2 = Mission(initial_mass=initial_mass, lunar_lander_mass=lunar_lander_mass, isp=isp, earth_reentry_altitude=earth_reentry_altitude, minimum_reentry_speed=minimum_reentry_speed, if_lowspeed_reentry=False, if_margin=True)
     c2.LEO_to_LLO()
     c2.GTO_to_LLO()
-
-    c3 = Mission(if_lowspeed_reentry=True, if_margin=False)
+    
+    # Low-speed, no margin
+    c3 = Mission(initial_mass=initial_mass, lunar_lander_mass=lunar_lander_mass, isp=isp, earth_reentry_altitude=earth_reentry_altitude, minimum_reentry_speed=minimum_reentry_speed, if_lowspeed_reentry=True, if_margin=False)
     c3.LEO_to_LLO()
     c3.GTO_to_LLO()
 
-    c4 = Mission(if_lowspeed_reentry=True, if_margin=True)
+    # Low-speed, w/ margin
+    c4 = Mission(initial_mass=initial_mass, lunar_lander_mass=lunar_lander_mass, isp=isp, earth_reentry_altitude=earth_reentry_altitude, minimum_reentry_speed=minimum_reentry_speed, if_lowspeed_reentry=True, if_margin=True)
     c4.LEO_to_LLO()
     c4.GTO_to_LLO()
+
+    # By default
+    # Output saved in ./results/<date> directory
+    # Figures saved in ./results/<date>/figures directory
